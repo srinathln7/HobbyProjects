@@ -1,4 +1,5 @@
 //jshint esversion:6
+
 require("dotenv").config();
 const express = require("express");
 const bodyParser = require("body-parser");
@@ -6,8 +7,10 @@ const ejs = require("ejs");
 const app = express();
 const mongoose = require("mongoose");
 const encrypt = require("mongoose-encryption");
-const bcrypt = require("bcrypt");
-const saltRounds = 10;
+const session = require("express-session");
+
+const passport = require("passport");
+const passportLocalMongoose = require("passport-local-mongoose");
 
 app.use(express.static("public"));
 app.set("view engine", 'ejs');
@@ -16,27 +19,39 @@ app.use( bodyParser.urlencoded({
   })
 );
 
+app.use(session ({
+    secret: "Our little secret.",
+    resave: false,
+    saveUninitialized: false
+  }));
+
+app.use(passport.initialize());
+app.use(passport.session());
+
+
 // Make a connection to the mongodb server
 mongoose.connect("mongodb://localhost:27017/userDB", {
   useNewUrlParser: true,
   useUnifiedTopology: true
 });
 
+mongoose.set("useCreateIndex", true);
+
 const userSchema = mongoose.Schema({
     email: String,
     password: String
 });
 
+userSchema.plugin(passportLocalMongoose);
 const secret = "I am a super man.";
 
-// Important to add this plugin before creating the user model
-// userSchema.plugin(encrypt, {
-//   secret: process.env.SECRET,
-//   encryptedFields: ["password"]
-// });
-
-
 let User = mongoose.model("User", userSchema);
+
+passport.use(User.createStrategy());
+passport.serializeUser(User.serializeUser());
+passport.deserializeUser(User.deserializeUser());
+
+
 app.get("/", function(req, res){
     res.render("home");
 });
@@ -53,47 +68,48 @@ app.listen(3000, function(){
     console.log("Server started on port 3000");
 });
 
+
+app.get("/secrets", function(req, res) {
+    if (req.isAuthenticated()) {
+      res.render("secrets");
+    } else {
+      res.render("login");
+    }
+});
+
 app.post("/register", function(req, res) {
-
-    bcrypt.hash(req.body.password, saltRounds, function(err, hashP) {
-      const newUser = new User ({
-        email: req.body.username,
-        password: hashP // Hashed password
-        });
-
-        newUser.save(function(err) {
-            if(!err) {
-              res.render("secrets");
-            }
-        });
+    User.register({username: req.body.username}, req.body.password, function(err, user) {
+        if(err) {
+            console.log(err);
+            res.redirect("/register");
+        } else {
+              passport.authenticate("local")(req, res, function() {
+              res.redirect("/secrets");
+          });
+        }
     });
-
 });
 
 app.post("/login", function(req, res) {
-   let eUserName = req.body.username;
-   let ePassword = req.body.password;
 
-   User.findOne({email: eUserName}, function(err, foundUser)  {
-      if (!err) {
-        if (foundUser) {
-           bcrypt.compare(ePassword, foundUser.password, function (err, result) {
-             if (result) {
-                res.render("secrets");
-             } else {
-                res.send("Incorrect password");
-              }
-           });
-          } else {
-            res.send("Username not registered.");
-          }
+  const user = new User({
+      username: req.body.username,
+      password: req.body.password
+    });
+
+      req.login(user, function(err){
+        if (err) {
+            console.log(err);
         } else {
-            res.send(err);
-        }
-   });
+            passport.authenticate("local")(req, res, function() {
+              res.redirect("/secrets");
+            });
+          }
+      });
 });
 
 
 app.get("/logout", function(req, res){
-    res.render("home");
+    req.logout();
+    res.redirect("/");
 });
